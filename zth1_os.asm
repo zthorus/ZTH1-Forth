@@ -8,12 +8,13 @@
 
 ! 0 = black, 1 = dark blue , 2 = yellow , 3 = red, 4 = pink
 ! 5 = cyan, 6 = orange, 7 = bright blue, 8 = grey, 9 = white
+! 10 = purple, 11 = green
 
 org x1800
 #x0080 ; #x0080 ; #x0080
 #x00ff ; #x00ff ; #xffff
-#xff00 ; #xff00 ; #x0000
-#xff00 ; #x2000 ; #x2000
+#xffff ; #xff00 ; #x00ff
+#xff00 ; #x20ff ; #x2000
 #xff00 ; #x8000 ; #x8000
 #x0000 ; #xff00 ; #xff00
 #xff00 ; #x8000 ; #x0000
@@ -600,7 +601,7 @@ cmp ; drp
 jpnz @ci_j4
 drp
 entr @v7
-entr @x00FF       ! if so, leave restriction on display of 0
+entr x00FF       ! if so, leave restriction on display of 0
 stw ; drp         ! (allow any character)
 drp
 jump @ci_loop1
@@ -630,4 +631,79 @@ rlw ; swp
 inc ; inp
 drp ; rlw
 ret
+
+! Define sprite bitmap
+! (sprite number,bitmap address) => (-)
+
+@def_sprite
+ccf ; rlw    ! target address= 8*sprite_number + x182a
+rlw ; rlw
+entr x182a
+add ; swp
+drp
+entr x0004  ! 4 words to be copied
+swp ; rd3   ! stack is [S,T,n]
+@dspr_loop
+dup ; ru4
+gtw ; sth   ! high-byte char bitmap => high-byte sprite
+swp ; inc
+swp ; swa
+sth ; drp   ! low-byte char bitmap => high-byte sprite
+inc ; rd3
+inc ; rd3
+dec ; ru3
+jpnz @dspr_loop
+drp ; drp
+drp ; ret 
+
+! Put sprite on screen
+! (sprite number,x,y) => (-)
+
+@put_sprite
+entr x1818
+add ; swp
+drp ; swp
+stl ; drp
+swp ; swa
+entr x8000 ! set sprite activation bit
+orr ; swp
+drp ; sth
+drp ; drp
+ret
+
+! Set sprite color
+! (sprite number,color) => (-)
+
+@color_sprite
+dup ; rrw      ! check if sprite number >=4
+rrw ; rrw
+jmpc @cspr_j1
+drp
+entr x1826
+add ; swp
+drp ; swp
+swa ; sth
+drp ; drp
+ret
+@cspr_j1
+drp
+entr x1822
+add ; swp
+drp ; swp
+stl ; drp
+drp ; ret
+
+! Hide sprite
+! (sprite number) => (-)
+
+@hide_sprite
+entr x1818
+add ; swp
+drp ; dup
+gtw
+entr x7fff
+and ; swp
+drp ; stw
+drp ; drp
+ret 
 

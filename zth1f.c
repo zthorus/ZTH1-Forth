@@ -1,7 +1,12 @@
-/* Forth cross-compiler for ZTH1
+/* Forth cross-compiler for the ZTH1 computer
+
+   By S. Morel, Zthorus Labs 
 
    Date          Action
    ----          ------
+   2021-12-02    Corrected bug in compilation of "=" word
+   2021-12-01    Added sprite-control words
+   2021-11-24    First release on GitHub
    2021-11-01    Created
 */
 
@@ -9,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define NB_BASE_WORDS 55
+#define NB_BASE_WORDS 59
 #define DATA_START_ADDR 6270
 
 void locase(char *sOut,char *sIn);
@@ -327,7 +332,15 @@ int main(int argc, char **argv)
   strcpy(baseWord[53],"cls");
   strcpy(baseCode[53],"0301028A2B"); its[53]=0;
   strcpy(baseWord[54],"joystick");
-  strcpy(baseCode[54],"030102ED2B"); its[53]=0;
+  strcpy(baseCode[54],"030102ED2B"); its[54]=0;
+  strcpy(baseWord[55],"defsprite");
+  strcpy(baseCode[55],"030102F92B"); its[55]=0;
+  strcpy(baseWord[56],"putsprite");
+  strcpy(baseCode[56],"0302020F2B"); its[56]=0;
+  strcpy(baseWord[57],"colorsprite");
+  strcpy(baseCode[57],"0302021B2B"); its[57]=0;
+  strcpy(baseWord[58],"hidesprite");
+  strcpy(baseCode[58],"0302022E2B"); its[58]=0;
 
   strcpy(fileList[0],argv[1]);
   nbFiles=1;
@@ -336,7 +349,7 @@ int main(int argc, char **argv)
   curVarAddr=DATA_START_ADDR;
   vIdx=0; wIdx=0; flIdx=0;
   maxErr=0;
-  pc=512;
+  pc=600;
   it=0;
   ietStkPtr=0; buStkPtr=0; dlStkPtr=0;
   for (i=0;i<20;i++) ietState[i]=0;
@@ -516,20 +529,7 @@ int main(int argc, char **argv)
           }
           else if (atom[0]=='$')
           {
-            n=0;
-            for (i=1;i<strlen(latom);i++)
-            {
-              n=n*16;
-              if ((latom[i]>='0') && (latom[i]<='9'))
-              {
-                n=n+(int)latom[i]-48;
-              }
-              else if ((latom[i]>='a') && (latom[i]<='f'))
-              {
-                n=n+(int)latom[i]-87;
-              } 
-              else n=100000;
-            }
+            n=hex2dec(atom+1);
             if (n>65535)
             {
               errCodeList[errIdx]=INTEGER_OUT_OF_RANGE;
@@ -559,7 +559,7 @@ int main(int argc, char **argv)
               if (i==23)
               {
                 /* "=" statement */
-                zValue(objCode,pc,pc-2);
+                zValue(objCode,pc,pc-3);
               }
               if ((i>=24) && (i<=30))
               {
@@ -763,7 +763,6 @@ int main(int argc, char **argv)
 
           case DEFINE_DATA1:
       
-          /* printf("----\n");*/ 
           if (isInteger(atom)==1)
           {
             dataAddr=atoi(atom);
@@ -1089,8 +1088,6 @@ int main(int argc, char **argv)
     writeFile("ram_l.mif",objData,ram,1);
     writeFile("rom.mif",objCode,rom,2);
   }
-
- 
 
   /* debug */
   /*
@@ -1499,7 +1496,7 @@ int hex2dec(char *s)
     if ((c>='0') && (c<='9')) x=16*x+(int)c-48;
     else if ((c>='A') && (c<='F')) x=16*x+(int)c-55;
     else if ((c>='a') && (c<='f')) x=16*x+(int)c-87;
-    else x=0;
+    else x=100000;
   }
   return(x);
 } 
@@ -1540,7 +1537,6 @@ int zHexData(char **objData,char *ram,char *latom,int *dataAddr)
       objData[a][4]='\0';
       ram[a]='1';
       j=j+4;
-      /*printf("zHD addr: %d\n",a);*/
       a++;
     }
     *dataAddr=a;
