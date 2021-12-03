@@ -4,6 +4,7 @@
 
    Date          Action
    ----          ------
+   2021-12-03    Calling words containing do-loops from inside a do-loop ok
    2021-12-02    Corrected bug in compilation of "=" word
    2021-12-01    Added sprite-control words
    2021-11-24    First release on GitHub
@@ -76,8 +77,9 @@ int main(int argc, char **argv)
   int srcJump;           /* source address of jump */
   int buTgt[20];         /* begin-until target address of jump (stack)*/
   int buStkPtr;          /* begin-until stack pointer */
-  int dlTgt[20];         /* do-loop target address of jump (stack) */
+  int dlTgt[80];         /* do-loop target address of jump (stack) */
   int dlStkPtr;          /* do-loop stack pointer */
+  int dlStkPtr0;         /* level 0 of dlStkPtr relative to a word */ 
   int dlMaxLevel;        /* maximum nesting level reached for do-loops */
   char startI[4];        /* do-loop start value (and current idx) variable */
   char stopI[4];         /* do-loop stop value variable */ 
@@ -472,6 +474,11 @@ int main(int argc, char **argv)
             if (it==1) zCode(objCode,rom,"00",&pc,&it,2);
             wordAddr[wIdx]=pc;
             wIdx++;
+            /* the following allows to call a word using a do-loop
+               from within another do-loop without mixing up the indices
+               (at the expense of more memory used for the variables) */
+            dlStkPtr0=dlMaxLevel;
+            dlStkPtr=dlStkPtr0;
             cmpState=DEFINE_WORD2;
           }
           else
@@ -491,7 +498,7 @@ int main(int argc, char **argv)
             /* end of word => RET */
             zCode(objCode,rom,"30",&pc,&it,2);
             /* check completion of structures */
-            if ((ietStkPtr!=0) || (buStkPtr!=0) || (dlStkPtr!=0))
+            if ((ietStkPtr!=0) || (buStkPtr!=0) || (dlStkPtr!=dlStkPtr0))
             {
               errCodeList[errIdx]=INVALID_STRUCT;
               strcpy(errArgList[errIdx],atom);
