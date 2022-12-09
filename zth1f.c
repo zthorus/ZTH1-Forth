@@ -4,6 +4,7 @@
 
    Date          Action
    ----          ------
+   2022-12-05    Added constant declarations
    2021-12-03    Calling words containing do-loops from inside a do-loop ok
    2021-12-02    Corrected bug in compilation of "=" word
    2021-12-01    Added sprite-control words
@@ -31,9 +32,9 @@ int hex2dec(char *s);
 int zHexData(char **objData,char *ram,char *latom,int *dataAddr);
 int zStringData(FILE *f,char **objData,char *mem,int *dataAddr);
 
-enum cst {GLOBAL,INCLUDE_FILES,DEFINE_GVAR,COMMENT,DEFINE_WORD1,DEFINE_WORD2,DEFINE_LVAR,DEFINE_DATA1,DEFINE_DATA2,END_FILE};
+enum comp_state {GLOBAL,INCLUDE_FILES,DEFINE_GVAR,COMMENT,DEFINE_WORD1,DEFINE_WORD2,DEFINE_LVAR,DEFINE_DATA1,DEFINE_DATA2,END_FILE,DEFINE_GCST1,DEFINE_GCST2,DEFINE_LCST1,DEFINE_LCST2};
 
-enum errc {FILE_NOT_FOUND,INVALID_VARIABLE_NAME,INVALID_WORD_NAME,INTEGER_OUT_OF_RANGE,INVALID_STRUCT,INVALID_DATA_ADDRESS,INVALID_NUMBER,STRING_TOO_LONG,OVERFLOW,UNEXPECTED_END};
+enum errc {FILE_NOT_FOUND,INVALID_VARIABLE_NAME,INVALID_CONSTANT_NAME,INVALID_WORD_NAME,INTEGER_OUT_OF_RANGE,INVALID_STRUCT,INVALID_DATA_ADDRESS,INVALID_NUMBER,STRING_TOO_LONG,OVERFLOW,UNEXPECTED_END};
 
 int main(int argc, char **argv)
 {
@@ -45,7 +46,7 @@ int main(int argc, char **argv)
 
   char atom[80];         /* currently parsed atom */
   char latom[80];        /* atom in lower case characters */
-  enum cst cmpState;     /* compiler state */
+  enum comp_state cmpState;  /* compiler state */
   int cmpSavedState;     /* previous compiler state */
   char word[40];         /* currently declared word */
 
@@ -57,18 +58,23 @@ int main(int argc, char **argv)
   int errIdx;            /* index of error list */
   int maxErr;            /* =1 if maximum number of errors reached */
 
-  char **fndLabelTable;  /* table of found labels (Forth words or variables) */
+  char **fndLabelTable;  /* table of found labels (Forth words or
+                            variables or constants) */
   char **fndLabelScopeTable; /* table of scopes of labels */
   int *fndLabelAddr;     /* addresses of found labels */
   char **varTable;       /* table of declared variables */
   char **varScopeTable;  /* table of scopes of declared variables */
-  int varAddr[100];      /* addresses of variables */
+  char **cstTable;       /* table of declared constants */
+  char **cstScopeTable;  /* table of scopes of declared constants */
+  int cstValue[300];     /* values of constants */
+  int varAddr[300];      /* addresses of variables */
   int curVarAddr;        /* current variable address */
   char **wordTable;      /* table of declared Forth words */
   int wordAddr[80];      /* addresses of words (targets for calls) */
   int flIdx;             /* found-label index */
   int wIdx;              /* declared-word index */
   int vIdx;              /* variables index */
+  int cIdx;              /* constants index */
 
   int ietState[20];      /* if-else-then-structure state (stack) */
   int ietElseSrc[20];    /* source address of jump after "if" (stack) */
@@ -175,6 +181,28 @@ int main(int argc, char **argv)
     if (varScopeTable[i]==NULL)
     {
       printf("No memory left for varScopeTable[%d]\n",i);
+      exit(0);
+    }
+  }
+  cstTable=malloc(300*sizeof(char *));
+  if (cstTable==NULL) exit(0);
+  for (i=0;i<300;i++)
+  {
+    cstTable[i]=malloc(40*sizeof(char));
+    if (cstTable[i]==NULL)
+    {
+      printf("No memory left for cstTable[%d]\n",i);
+      exit(0);
+    }
+  }
+  cstScopeTable=malloc(300*sizeof(char *));
+  if (cstScopeTable==NULL) exit(0);
+  for (i=0;i<300;i++)
+  {
+    cstScopeTable[i]=malloc(40*sizeof(char));
+    if (cstScopeTable[i]==NULL)
+    {
+      printf("No memory left for cstScopeTable[%d]\n",i);
       exit(0);
     }
   }
@@ -349,7 +377,7 @@ int main(int argc, char **argv)
   fIdx=0;
   errIdx=0;
   curVarAddr=DATA_START_ADDR;
-  vIdx=0; wIdx=0; flIdx=0;
+  vIdx=0; cIdx=0; wIdx=0; flIdx=0;
   maxErr=0;
   pc=600;
   it=0;
@@ -419,6 +447,11 @@ int main(int argc, char **argv)
           {
             cmpState=DEFINE_GVAR;
           }
+          if ((strcmp(latom,"cst")==0) || (strcmp(latom,"constant")==0))
+          {
+            /* printf("Declaring global constant\n"); */
+            cmpState=DEFINE_GCST1;
+          }
           if (strcmp(latom,"data")==0)
           {
             cmpState=DEFINE_DATA1;
@@ -463,7 +496,64 @@ int main(int argc, char **argv)
             errIdx++;
           }
           break; 
-          
+         
+          case DEFINE_GCST1:
+
+          cmpState=DEFINE_GCST2;
+          if (validWord(latom,baseWord))
+          {
+            /* printf("Constant name is %s\n",latom); */
+            strcpy(cstTable[cIdx],latom);
+            strcpy(cstScopeTable[cIdx],"global");
+          }
+          else
+          {
+            errCodeList[errIdx]=INVALID_CONSTANT_NAME;
+            strcpy(errArgList[errIdx],atom);
+            errLine[errIdx]=lineNb;
+            errIdx++;
+          }
+          break;
+
+          case DEFINE_GCST2:
+
+          cmpState=GLOBAL;
+          if (isInteger(atom)==1)
+          {
+            n=atoi(atom);
+            if ((n<-32768) || (n>65535))
+            {
+              errCodeList[errIdx]=INTEGER_OUT_OF_RANGE;
+              strcpy(errArgList[errIdx],atom);
+              errLine[errIdx]=lineNb;
+              errIdx++;
+            }
+            else
+            {
+              if (n<0) n+=65536;
+              /* printf("Value of %s is %d\n",cstTable[cIdx],n); */
+              cstValue[cIdx]=n;
+              cIdx++;
+            }
+          }
+          else if (atom[0]=='$')
+          {
+            n=hex2dec(atom+1);
+            if (n>65535)
+            {
+              errCodeList[errIdx]=INTEGER_OUT_OF_RANGE;
+              strcpy(errArgList[errIdx],atom);
+              errLine[errIdx]=lineNb;
+              errIdx++;
+            }
+            else
+            {
+              cstValue[cIdx]=n;
+              cIdx++;
+            }
+          }
+          break;
+
           case DEFINE_WORD1:
         
           if (validWord(latom,baseWord))
@@ -514,6 +604,10 @@ int main(int argc, char **argv)
           else if ((strcmp(latom,"var")==0) || (strcmp(latom,"variable")==0))
           {
              cmpState=DEFINE_LVAR;
+          }
+          else if ((strcmp(latom,"cst")==0) || (strcmp(latom,"constant")==0))
+          {
+             cmpState=DEFINE_LCST1;
           }
           /* if atom = number to push into stack */
           else if (isInteger(atom)==1)
@@ -716,28 +810,41 @@ int main(int argc, char **argv)
             }
             else
             {
-              /* user-defined word or variable */
-              /* check if variable or word already defined
-                 this may avoid NOP insertion (that may later
-                 be replaced by a CAL or not)
-                 Anyway, substitution to numerical value will
-                 be done in the 2nd pass
-              */
-              for (i=0;i<vIdx;i++)
+              /* check if atom is a declared constant */
+             
+              for (i=0;i<cIdx;i++) 
               {
-                if ((strcmp(latom,varTable[i])==0) &&
-                    ((strcmp(varScopeTable[i],"global")==0) ||
-                     (strcmp(varScopeTable[i],word)==0))) break;
+                /* printf("%d : %s %s\n",i,cstTable[i],cstScopeTable[i]); */
+                if ((strcmp(latom,cstTable[i])==0) &&
+                    ((strcmp(cstScopeTable[i],"global")==0) ||
+                     (strcmp(cstScopeTable[i],word)==0))) break;
               }
-              if (i!=vIdx) strcpy(opCode,"03000200");
+              if (i!=cIdx) strcpy(opCode,"03000200");
               else
               {
-                for (i=0;i<wIdx;i++)
+                /* user-defined word or variable */
+                /* check if variable or word already defined
+                   this may avoid NOP insertion (that may later
+                   be replaced by a CAL or not)
+                   Anyway, substitution to numerical value will
+                   be done in the 2nd pass
+                */
+                for (i=0;i<vIdx;i++)
                 {
-                  if (strcmp(latom,wordTable[i])==0) break;
+                  if ((strcmp(latom,varTable[i])==0) &&
+                      ((strcmp(varScopeTable[i],"global")==0) ||
+                       (strcmp(varScopeTable[i],word)==0))) break;
                 }
-                if (i!=wIdx) strcpy(opCode,"030002002B");
-                else strcpy(opCode,"0200030000");
+                if (i!=vIdx) strcpy(opCode,"03000200");
+                else
+                {
+                  for (i=0;i<wIdx;i++)
+                  {
+                    if (strcmp(latom,wordTable[i])==0) break;
+                  }
+                  if (i!=wIdx) strcpy(opCode,"030002002B");
+                  else strcpy(opCode,"0200030000");
+                }
               }
               zCode(objCode,rom,opCode,&pc,&it,0);
               strcpy(fndLabelTable[flIdx],latom);
@@ -765,6 +872,61 @@ int main(int argc, char **argv)
             strcpy(errArgList[errIdx],atom);
             errLine[errIdx]=lineNb;
             errIdx++;
+          }
+          break;
+
+          case DEFINE_LCST1:
+
+          cmpState=DEFINE_LCST2; 
+          if (validWord(latom,baseWord))
+          {
+            strcpy(cstTable[cIdx],latom);
+            strcpy(cstScopeTable[cIdx],word);
+          }
+          else
+          {
+            errCodeList[errIdx]=INVALID_CONSTANT_NAME;
+            strcpy(errArgList[errIdx],atom);
+            errLine[errIdx]=lineNb;
+            errIdx++;
+          }
+          break;
+
+          case DEFINE_LCST2:
+
+          cmpState=DEFINE_WORD2;
+          if (isInteger(atom)==1)
+          {
+            n=atoi(atom);
+            if ((n<-32768) || (n>65535))
+            {
+              errCodeList[errIdx]=INTEGER_OUT_OF_RANGE;
+              strcpy(errArgList[errIdx],atom);
+              errLine[errIdx]=lineNb;
+              errIdx++;
+            }
+            else
+            {
+              if (n<0) n+=65536;
+              cstValue[cIdx]=n;
+              cIdx++;
+            }
+          }
+          else if (atom[0]=='$')
+          {
+            n=hex2dec(atom+1);
+            if (n>65535)
+            {
+              errCodeList[errIdx]=INTEGER_OUT_OF_RANGE;
+              strcpy(errArgList[errIdx],atom);
+              errLine[errIdx]=lineNb;
+              errIdx++;
+            }
+            else
+            {
+              cstValue[cIdx]=n;
+              cIdx++;
+            }
           }
           break;
 
@@ -908,8 +1070,8 @@ int main(int argc, char **argv)
         }
 
         /* check if indexes are within limits */
-        if ((flIdx==1000) || (vIdx==300) || (wIdx==80) || (pc>8150)
-            || (ietStkPtr==20) || (dlStkPtr==20) || (buStkPtr==20))
+        if ((flIdx==1000) || (vIdx==300) || (cIdx==300)|| (wIdx==80) ||
+            (pc>8150) || (ietStkPtr==20) || (dlStkPtr==20) || (buStkPtr==20))
         {
           errCodeList[errIdx]=OVERFLOW;
           strcpy(errArgList[errIdx],fileList[fIdx]);
@@ -963,6 +1125,9 @@ int main(int argc, char **argv)
         case INVALID_VARIABLE_NAME:
          sprintf(errMsg,"Line %d : Invalid variable %s (too long or already used in base dictionary)\n", errLine[i],errArgList[i]);
          break;
+        case INVALID_CONSTANT_NAME:
+         sprintf(errMsg,"Line %d : Invalid constant %s (too long or already used in base dictionary)\n", errLine[i],errArgList[i]);
+         break;
         case INVALID_STRUCT:
           sprintf(errMsg,"Line %d : Invalid structure (%s misplaced)\n",errLine[i],errArgList[i]);
           break;
@@ -987,21 +1152,43 @@ int main(int argc, char **argv)
   /* 2nd pass */
 
   printf("Start pass 2...\n");
-  /* check labels are not declared twice */
+  /* check labels are not declared twice
+     variables and constants can be declared twice only if
+     they are local and in different scopes */
   if (errIdx==0)
   {
+    /* check variable vs. variable */
     for (i=0;i<(vIdx-1);i++)
     {
       for (j=(i+1);j<vIdx;j++)
       {
         if ((strcmp(varTable[i],varTable[j])==0) &&
-            (strcmp(varScopeTable[i],varScopeTable[j])==0)) break;
+            ((strcmp(varScopeTable[i],varScopeTable[j])==0) ||
+             (strcmp(varScopeTable[i],"global")==0) ||
+             (strcmp(varScopeTable[j],"global")==0))) break;
       }
       if (j<vIdx)
       {
         printf("Variable %s (scope: %s) declared more than once\n",varTable[i],varScopeTable[i]);
         errIdx++;
       }
+    }
+    for (i=0;i<vIdx;i++)
+    {
+      /* check variable vs. constant */
+      for (j=0;j<cIdx;j++)
+      {
+        if ((strcmp(varTable[i],cstTable[j])==0) &&
+            ((strcmp(varScopeTable[i],cstScopeTable[j])==0) ||
+             (strcmp(varScopeTable[i],"global")==0) ||
+             (strcmp(cstScopeTable[j],"global")==0))) break;
+      }
+      if (j<cIdx)
+      {
+        printf("%s used for both variable and constant\n",varTable[j]);
+        errIdx++;
+      }
+      /* check variable vs. word */
       for (j=0;j<wIdx;j++)
       {
         if (strcmp(varTable[i],wordTable[j])==0) break;
@@ -1012,6 +1199,7 @@ int main(int argc, char **argv)
         errIdx++;
       }
     }
+    /* check word vs. word */
     for (i=0;i<(wIdx-1);i++)
     {
       for (j=(i+1);j<wIdx;j++)
@@ -1023,7 +1211,37 @@ int main(int argc, char **argv)
         printf("Word %s declared more than once\n",wordTable[i]);
         errIdx++;
       }
+    }
+    /* check word vs. constant */
+    for (i=0;i<wIdx;i++)
+    {
+      for (j=0;j<cIdx;j++)
+      {
+        if (strcmp(wordTable[i],cstTable[j])==0) break;
+      }
+      if (j<cIdx)
+      {
+        printf("%s used for both word and constant\n",varTable[j]);
+        errIdx++;
+      }
     } 
+    /* check constant vs. constant */
+    for (i=0;i<(cIdx-1);i++)
+    {
+      for (j=(i+1);j<cIdx;j++)
+      {
+        if ((strcmp(cstTable[i],cstTable[j])==0) &&
+            ((strcmp(cstScopeTable[i],cstScopeTable[j])==0) ||
+             (strcmp(cstScopeTable[i],"global")==0) ||
+             (strcmp(cstScopeTable[j],"global")==0))) break;
+      }
+      if (j<cIdx)
+      {
+        printf("Constant %s (scope: %s) declared more than once\n",cstTable[i],cstScopeTable[i]);
+        errIdx++;
+      }
+    }
+
 
     /* label resolution */
   
@@ -1048,24 +1266,38 @@ int main(int argc, char **argv)
       }
       else
       {
-        for (j=0;j<wIdx;j++)
+        for (j=0;j<cIdx;j++)
         {
-          if (strcmp(fndLabelTable[i],wordTable[j])==0) break;
+          if ((strcmp(fndLabelTable[i],cstTable[j])==0)  &&
+              ((strcmp(cstScopeTable[j],"global")==0) ||
+               (strcmp(cstScopeTable[j],fndLabelScopeTable[i])==0))) break;
         }
-        if (j<wIdx)
+        if (j<cIdx)
         {
-          /* printf("Solved %s (word)\n",fndLabelTable[i]);*/
-          zValue(objCode,wordAddr[j],fndLabelAddr[i]);
-          /* code CAL to word (if needed) */
-          pc2=fndLabelAddr[i]+2;
-          it2=0;
-          zCode(objCode,rom,"2B",&pc2,&it2,0);
+           /* printf("Solved %s (constant)\n",fndLabelTable[i]); */ 
+          zValue(objCode,cstValue[j],fndLabelAddr[i]);
         }
         else
         {
-          printf("Label %s not declared as a word or variable\n",fndLabelTable[i]);
-          errIdx++;
-        }
+          for (j=0;j<wIdx;j++)
+          {
+            if (strcmp(fndLabelTable[i],wordTable[j])==0) break;
+          }
+          if (j<wIdx)
+          {
+            /* printf("Solved %s (word)\n",fndLabelTable[i]);*/
+            zValue(objCode,wordAddr[j],fndLabelAddr[i]);
+            /* code CAL to word (if needed) */
+            pc2=fndLabelAddr[i]+2;
+            it2=0;
+            zCode(objCode,rom,"2B",&pc2,&it2,0);
+          }
+          else
+          {
+            printf("Label %s not declared as a word or variable\n",fndLabelTable[i]);
+            errIdx++;
+          }
+        } 
       }
     }       
   }
@@ -1119,8 +1351,8 @@ int main(int argc, char **argv)
 }
           
 
-/* convert uppercase to lowercase (Forth words and variables are
-   case-insensitive */
+/* convert uppercase to lowercase (Forth words, variables and
+   constants are case-insensitive */
 
 void locase(char *sOut,char *sIn)
 {
@@ -1235,6 +1467,8 @@ int validWord(char *a,char **baseWord)
   if (strcmp(a,":")==0) x=0;
   if (strcmp(a,"var")==0) x=0;
   if (strcmp(a,"variable")==0) x=0;
+  if (strcmp(a,"cst")==0) x=0;
+  if (strcmp(a,"constant")==0) x=0;
 
   return(x); 
 }  
@@ -1487,7 +1721,9 @@ int readLine(FILE *f,char *s)
   return(r);
 }
 
-/* convert hexadecimal number in string to integer */
+/* convert hexadecimal number in string to integer
+   return 100000 (out of range) if string does not represent an integer
+   hexadecimal numbers are case-insensitive */
  
 int hex2dec(char *s)
 {
