@@ -1,9 +1,10 @@
-/* Forth cross-compiler for the ZTH1 computer
+/* Forth cross-compiler for the ZTH1 computer and the VectorUGo2 console
 
    By S. Morel, Zthorus Labs 
 
    Date          Action
    ----          ------
+   2023-01-12    Added -v option to compile code for VectorUGo2 console
    2022-12-05    Added constant declarations
    2021-12-03    Calling words containing do-loops from inside a do-loop ok
    2021-12-02    Corrected bug in compilation of "=" word
@@ -16,21 +17,30 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define NB_BASE_WORDS 59
-#define DATA_START_ADDR 6270
+#define NB_BASE_WORDS_MAX 69
+#define NB_BASE_WORDS_ZTH1 59
+#define NB_BASE_WORDS_VUGO 69
+#define DATA_START_ADDR_ZTH1 6270
+#define DATA_START_ADDR_VUGO 2560
+#define CODE_START_ADDR_ZTH1 600
+#define CODE_START_ADDR_VUGO 2560
+#define RAM_SIZE_ZTH1 8192
+#define RAM_SIZE_VUGO 4096
 
 void locase(char *sOut,char *sIn);
 int getAtom(FILE *f,char *a,int *l);
 int isInteger(char *s);
-int validWord(char *a,char **baseWord);
+int validWord(char *a,char **baseWord,int nb_base_words);
 void zCode(char **objCode,char *mem,char *opCode,int *pcPtr,int *itPtr,int its);
 void zValue(char **objCode,int x,int pc);
-int writeFile(char *name,char **obj,char *mem,int b);
+int writeFile(char *name,char **obj,char *mem,int b,int ramSize);
 int readFile(char *name,char **obj,char *mem,int b);
 int readLine(FILE *f,char *s);
 int hex2dec(char *s);
 int zHexData(char **objData,char *ram,char *latom,int *dataAddr);
-int zStringData(FILE *f,char **objData,char *mem,int *dataAddr);
+int zStringData(FILE *f,char **objData,char *mem,int *dataAddr,int dataStartAddr,int ramSize);
+
+enum targetsys {ZTH1,VUGO};
 
 enum comp_state {GLOBAL,INCLUDE_FILES,DEFINE_GVAR,COMMENT,DEFINE_WORD1,DEFINE_WORD2,DEFINE_LVAR,DEFINE_DATA1,DEFINE_DATA2,END_FILE,DEFINE_GCST1,DEFINE_GCST2,DEFINE_LCST1,DEFINE_LCST2};
 
@@ -38,6 +48,7 @@ enum errc {FILE_NOT_FOUND,INVALID_VARIABLE_NAME,INVALID_CONSTANT_NAME,INVALID_WO
 
 int main(int argc, char **argv)
 {
+  enum targetsys target; /* target system of compiler */
   FILE *fSource;         /* source file currently read */
   char **fileList;       /* list of source files */
   int nbFiles;           /* number of source files to read */
@@ -92,10 +103,13 @@ int main(int argc, char **argv)
  
   int dataAddr;          /* address of RAM-stored data */
   int dataAddrSaved;     /* back-up of address of data */
+  int dataStartAddr;     /* starting address of data (target dependent) */
 
   char **baseWord;       /* base forth dictionary */
   char **baseCode;       /* ZTH1 code of words in base dictionary */
-  int its[NB_BASE_WORDS];/* starting IT value for ZTH1 op-code sequence */
+  int its[NB_BASE_WORDS_MAX]; /* starting IT value for ZTH1 op-code sequence */
+                              /*  (2 = doesn't matter) */
+  int nb_base_words;     /* number of base words (target dependent) */
   char hexVal[5];        /* value in hexadecimal */
   char opCode[32];       /* sequence of ZTH1 op-codes for a Forth word */
   int pc;                /* simulated ZTH1 program-counter register */
@@ -106,15 +120,28 @@ int main(int argc, char **argv)
   char **objData;        /* object data (to be split into RAM_H and RAM_L) */
   char rom[8192];        /* 16-bit words in ROM used */
   char ram[8192];        /* 16-bit words in RAM used */
-
+  int ramSize;           /* Actual RAM size (in 16-bit words) of target */
   int i,j,k,l,m,n; 
 
   char dum[40];
 
   if (argc != 2)
   {
-    printf("Syntax: zth1f <source file>\n");
-    exit(0);
+    if ((argc == 3) && (strcmp(argv[1],"-v")==0))
+    {
+      target=VUGO;
+      ramSize=RAM_SIZE_VUGO;
+    }
+    else
+    {
+      printf("Syntax: zth1f <source file>\n");
+      exit(0);
+    }
+  }
+  else
+  {
+    target=ZTH1;
+    ramSize=RAM_SIZE_ZTH1;
   }
 
   fileList=malloc(20*sizeof(char *));
@@ -217,11 +244,11 @@ int main(int argc, char **argv)
       exit(0);
     }
   }
-  baseWord=malloc(NB_BASE_WORDS*sizeof(char *));
+  baseWord=malloc(NB_BASE_WORDS_MAX*sizeof(char *));
   if (baseWord==NULL) exit(0);
-  baseCode=malloc(NB_BASE_WORDS*sizeof(char *));
+  baseCode=malloc(NB_BASE_WORDS_MAX*sizeof(char *));
   if (baseCode==NULL) exit(0);
-  for (i=0;i<NB_BASE_WORDS;i++)
+  for (i=0;i<NB_BASE_WORDS_MAX;i++)
   {
     baseWord[i]=malloc(10*sizeof(char));
     if (baseWord[i]==NULL)
@@ -341,56 +368,132 @@ int main(int argc, char **argv)
   strcpy(baseCode[43],"0300020007"); its[43]=0;
  
   /* words calling OS routines */
-  strcpy(baseWord[44],".");
-  strcpy(baseCode[44],"030102972B"); its[44]=0;
-  strcpy(baseWord[45],".\"");
-  strcpy(baseCode[45],"030002000301023B2B"); its[45]=0;
-  strcpy(baseWord[46],"u*");
-  strcpy(baseCode[46],"030002062B"); its[46]=0;
-  strcpy(baseWord[47],"*");
-  strcpy(baseCode[47],"0300021F2B"); its[47]=0;
-  strcpy(baseWord[48],"/");
-  strcpy(baseCode[48],"030002722B"); its[48]=0;
-  strcpy(baseWord[49],"/mod");
-  strcpy(baseCode[49],"030002762B"); its[49]=0;
-  strcpy(baseWord[50],"at");
-  strcpy(baseCode[50],"0301028F2B"); its[50]=0;
-  strcpy(baseWord[51],"cr");
-  strcpy(baseCode[51],"0301021F2B"); its[51]=0;
-  strcpy(baseWord[52],"emit");
-  strcpy(baseCode[52],"0300027A2B"); its[52]=0;
-  strcpy(baseWord[53],"cls");
-  strcpy(baseCode[53],"0301028A2B"); its[53]=0;
-  strcpy(baseWord[54],"joystick");
-  strcpy(baseCode[54],"030102ED2B"); its[54]=0;
-  strcpy(baseWord[55],"defsprite");
-  strcpy(baseCode[55],"030102F92B"); its[55]=0;
-  strcpy(baseWord[56],"putsprite");
-  strcpy(baseCode[56],"0302020F2B"); its[56]=0;
-  strcpy(baseWord[57],"colorsprite");
-  strcpy(baseCode[57],"0302021B2B"); its[57]=0;
-  strcpy(baseWord[58],"hidesprite");
-  strcpy(baseCode[58],"0302022E2B"); its[58]=0;
 
-  strcpy(fileList[0],argv[1]);
+  if (target==VUGO)
+  {
+    nb_base_words=NB_BASE_WORDS_VUGO;
+    strcpy(baseWord[44],"u*");
+    strcpy(baseCode[44],"030002032B"); its[44]=0;
+    strcpy(baseWord[45],"*");
+    strcpy(baseCode[45],"0300021C2B"); its[45]=0;
+    strcpy(baseWord[46],"/");
+    strcpy(baseCode[46],"0300026F2B"); its[46]=0;
+    strcpy(baseWord[47],"/mod");
+    strcpy(baseCode[47],"030002732B"); its[47]=0;
+    strcpy(baseWord[48],"sin");
+    strcpy(baseCode[48],"030002772B"); its[48]=0;
+    strcpy(baseWord[49],"cos");
+    strcpy(baseCode[49],"030002A52B"); its[49]=0;
+    strcpy(baseWord[50],"rsin");
+    strcpy(baseCode[50],"030002D42B"); its[50]=0;
+    strcpy(baseWord[51],"rcos");
+    strcpy(baseCode[51],"030002DA2B"); its[51]=0;
+    strcpy(baseWord[52],"rotscal");
+    strcpy(baseCode[52],"030002FA2B"); its[52]=0;
+    strcpy(baseWord[53],"defsprite");
+    strcpy(baseCode[53],"030102752B"); its[53]=0;
+    strcpy(baseWord[54],"delsprite");
+    strcpy(baseCode[54],"030102E32B"); its[54]=0;
+    strcpy(baseWord[55],"copysprite");
+    strcpy(baseCode[55],"030202422B"); its[55]=0;
+    strcpy(baseWord[56],"rotscalsprite");
+    strcpy(baseCode[56],"030202562B"); its[56]=0;
+    strcpy(baseWord[57],"putsprite");
+    strcpy(baseCode[57],"030202D52B"); its[57]=0;
+    strcpy(baseWord[58],"showsprite");
+    strcpy(baseCode[58],"030202DC2B"); its[58]=0;
+    strcpy(baseWord[59],"masksprite");
+    strcpy(baseCode[59],"030202ED2B"); its[59]=0;
+    strcpy(baseWord[60],"hidesprite");
+    strcpy(baseCode[60],"0303021D2B"); its[60]=0;
+    strcpy(baseWord[61],"closesprite");
+    strcpy(baseCode[61],"0303022E2B"); its[61]=0;
+    strcpy(baseWord[62],"collision");
+    strcpy(baseCode[62],"030302732B"); its[62]=0;
+    strcpy(baseWord[63],"emit");
+    strcpy(baseCode[63],"030502B62B"); its[63]=0;
+    strcpy(baseWord[64],"at");
+    strcpy(baseCode[64],"030602062B"); its[64]=0;
+    strcpy(baseWord[65],".\"");
+    strcpy(baseCode[65],"030002000306020F2B"); its[65]=0;
+    strcpy(baseWord[66],".");
+    strcpy(baseCode[66],"030602772B"); its[66]=0;
+    strcpy(baseWord[67],"joystick");
+    strcpy(baseCode[67],"030602A82B"); its[67]=0;
+    strcpy(baseWord[68],"switch");
+    strcpy(baseCode[68],"0B"); its[68]=2;
+    strcpy(fileList[0],argv[2]);
+  }  
+  else
+  {
+    nb_base_words=NB_BASE_WORDS_ZTH1;
+    strcpy(baseWord[44],".");
+    strcpy(baseCode[44],"030102972B"); its[44]=0;
+    strcpy(baseWord[45],".\"");
+    strcpy(baseCode[45],"030002000301023B2B"); its[45]=0;
+    strcpy(baseWord[46],"u*");
+    strcpy(baseCode[46],"030002062B"); its[46]=0;
+    strcpy(baseWord[47],"*");
+    strcpy(baseCode[47],"0300021F2B"); its[47]=0;
+    strcpy(baseWord[48],"/");
+    strcpy(baseCode[48],"030002722B"); its[48]=0;
+    strcpy(baseWord[49],"/mod");
+    strcpy(baseCode[49],"030002762B"); its[49]=0;
+    strcpy(baseWord[50],"at");
+    strcpy(baseCode[50],"0301028F2B"); its[50]=0;
+    strcpy(baseWord[51],"cr");
+    strcpy(baseCode[51],"0301021F2B"); its[51]=0;
+    strcpy(baseWord[52],"emit");
+    strcpy(baseCode[52],"0300027A2B"); its[52]=0;
+    strcpy(baseWord[53],"cls");
+    strcpy(baseCode[53],"0301028A2B"); its[53]=0;
+    strcpy(baseWord[54],"joystick");
+    strcpy(baseCode[54],"030102ED2B"); its[54]=0;
+    strcpy(baseWord[55],"defsprite");
+    strcpy(baseCode[55],"030102F92B"); its[55]=0;
+    strcpy(baseWord[56],"putsprite");
+    strcpy(baseCode[56],"0302020F2B"); its[56]=0;
+    strcpy(baseWord[57],"colorsprite");
+    strcpy(baseCode[57],"0302021B2B"); its[57]=0;
+    strcpy(baseWord[58],"hidesprite");
+    strcpy(baseCode[58],"0302022E2B"); its[58]=0;
+    strcpy(fileList[0],argv[1]);
+  }
   nbFiles=1;
   fIdx=0;
   errIdx=0;
-  curVarAddr=DATA_START_ADDR;
+  if (target==ZTH1)
+  {
+    curVarAddr=DATA_START_ADDR_ZTH1;
+    pc=CODE_START_ADDR_ZTH1;
+  }
+  else
+  {
+    curVarAddr=DATA_START_ADDR_VUGO;
+    pc=CODE_START_ADDR_VUGO;
+  }
+  dataStartAddr=curVarAddr;
   vIdx=0; cIdx=0; wIdx=0; flIdx=0;
   maxErr=0;
-  pc=600;
   it=0;
   ietStkPtr=0; buStkPtr=0; dlStkPtr=0;
   for (i=0;i<20;i++) ietState[i]=0;
   dlMaxLevel=0;
 
   /* read OS files of ZTH1 computer */
-  if (readFile("os_rom.mif",objCode,rom,2)==-1) exit(0);
-  if (readFile("os_ram_h.mif",objData,ram,0)==-1) exit(0);
-  if (readFile("os_ram_l.mif",objData,ram,1)==-1) exit(0);
+  if (target==ZTH1)
+  {
+    if (readFile("zth1_os_rom.mif",objCode,rom,2)==-1) exit(0);
+    if (readFile("zth1_os_ram_h.mif",objData,ram,0)==-1) exit(0);
+    if (readFile("zth1_os_ram_l.mif",objData,ram,1)==-1) exit(0);
+  }
+  else
+  {
+    if (readFile("vug_os_rom.mif",objCode,rom,2)==-1) exit(0);
+    if (readFile("vug_os_ram_h.mif",objData,ram,0)==-1) exit(0);
+    if (readFile("vug_os_ram_l.mif",objData,ram,1)==-1) exit(0);
+  }
   
-
   printf("Start pass 1...\n");
 
   /* pass 1: converting Forth code into ZTH1 code */
@@ -480,7 +583,7 @@ int main(int argc, char **argv)
           case DEFINE_GVAR:
         
           cmpState=GLOBAL;
-          if (validWord(latom,baseWord))
+          if (validWord(latom,baseWord,nb_base_words))
           {
             strcpy(varTable[vIdx],latom);
             strcpy(varScopeTable[vIdx],"global");
@@ -500,7 +603,7 @@ int main(int argc, char **argv)
           case DEFINE_GCST1:
 
           cmpState=DEFINE_GCST2;
-          if (validWord(latom,baseWord))
+          if (validWord(latom,baseWord,nb_base_words))
           {
             /* printf("Constant name is %s\n",latom); */
             strcpy(cstTable[cIdx],latom);
@@ -556,7 +659,7 @@ int main(int argc, char **argv)
 
           case DEFINE_WORD1:
         
-          if (validWord(latom,baseWord))
+          if (validWord(latom,baseWord,nb_base_words))
           {
             strcpy(wordTable[wIdx],latom);
             strcpy(word,latom);
@@ -590,6 +693,9 @@ int main(int argc, char **argv)
             /* check completion of structures */
             if ((ietStkPtr!=0) || (buStkPtr!=0) || (dlStkPtr!=dlStkPtr0))
             {
+              /* printf("if-else-then level: %d\n",ietStkPtr);
+              printf("begin-until level: %d\n",buStkPtr);
+              printf("do-loop level: %d %d\n",dlStkPtr,dlStkPtr0); */
               errCodeList[errIdx]=INVALID_STRUCT;
               strcpy(errArgList[errIdx],atom);
               errLine[errIdx]=lineNb;
@@ -649,11 +755,11 @@ int main(int argc, char **argv)
           /* check if word is in base dictionary */
           else
           {
-            for (i=0;i<NB_BASE_WORDS;i++)
+            for (i=0;i<nb_base_words;i++)
             {
               if (strcmp(latom,baseWord[i])==0) break;
             }
-            if (i<NB_BASE_WORDS)
+            if (i<nb_base_words)
             {
               /* printf ("\nbase word %s found\n",baseWord[i]);*/
               zCode(objCode,rom,baseCode[i],&pc,&it,its[i]);
@@ -666,6 +772,7 @@ int main(int argc, char **argv)
               {
                 /* "if" statement */
                 ietStkPtr++;
+                /* printf("Line %d: if-then level= %d\n",lineNb,ietStkPtr);*/
                 ietState[ietStkPtr]=1;
                 ietElseSrc[ietStkPtr]=pc-2;
               }
@@ -705,6 +812,7 @@ int main(int argc, char **argv)
                   zValue(objCode,pc,srcJump);
                   ietState[ietStkPtr]=0;
                   ietStkPtr--;
+                  /* printf("Line %d: if-then level= %d\n",lineNb,ietStkPtr);*/
                 }
               }
               if (i==33)
@@ -729,6 +837,8 @@ int main(int argc, char **argv)
                    "n" : starting index of loop (also current index)
                    "0n": maximum index of loop (loop ends before)
                 */ 
+                /*printf("Line %d : do declared, level= %d\n",lineNb,dlStkPtr);
+                */
                 sprintf(startI,"%d",dlStkPtr);
                 sprintf(stopI,"0%d",dlStkPtr);
                 if (dlStkPtr>dlMaxLevel)
@@ -795,12 +905,12 @@ int main(int argc, char **argv)
                   flIdx++;
                 }
               }
-              if (i==45)
+              if (((i==45) && (target==ZTH1)) || ((i==65) && (target==VUGO)))
               {
                 /* print character string (.") */
                 /* address of string = address of upcoming data */
                 zValue(objCode,curVarAddr,pc-4);
-                if (zStringData(fSource,objData,ram,&curVarAddr)==0)
+                if (zStringData(fSource,objData,ram,&curVarAddr,dataStartAddr,ramSize)==0)
                 {
                   errCodeList[errIdx]=STRING_TOO_LONG;
                   errLine[errIdx]=lineNb;
@@ -858,7 +968,7 @@ int main(int argc, char **argv)
           case DEFINE_LVAR:
 
           cmpState=DEFINE_WORD2;
-          if (validWord(latom,baseWord))
+          if (validWord(latom,baseWord,nb_base_words))
           {
             strcpy(varTable[vIdx],latom);
             strcpy(varScopeTable[vIdx],word);
@@ -878,7 +988,7 @@ int main(int argc, char **argv)
           case DEFINE_LCST1:
 
           cmpState=DEFINE_LCST2; 
-          if (validWord(latom,baseWord))
+          if (validWord(latom,baseWord,nb_base_words))
           {
             strcpy(cstTable[cIdx],latom);
             strcpy(cstScopeTable[cIdx],word);
@@ -942,7 +1052,7 @@ int main(int argc, char **argv)
           }
           else
           {
-            if (validWord(latom,baseWord))
+            if (validWord(latom,baseWord,nb_base_words))
             {
               strcpy(varTable[vIdx],latom);
               strcpy(varScopeTable[vIdx],"global");
@@ -959,13 +1069,13 @@ int main(int argc, char **argv)
             }
           }
           /* printf("data address: %d\n",dataAddr);*/
-          if ((dataAddr<DATA_START_ADDR) || (dataAddr>8192))
+          if ((dataAddr<dataStartAddr) || (dataAddr>ramSize))
           {
             errCodeList[errIdx]=INVALID_DATA_ADDRESS;
             strcpy(errArgList[errIdx],atom);
             errLine[errIdx]=lineNb;
             errIdx++;
-            dataAddr=DATA_START_ADDR;
+            dataAddr=dataStartAddr;
           }
           cmpState=DEFINE_DATA2;
           break;
@@ -1045,7 +1155,7 @@ int main(int argc, char **argv)
           if (latom[0]=='"')
           {
             /* printf("data is character string\n");*/
-            if (zStringData(fSource,objData,ram,&dataAddr)==0)
+            if (zStringData(fSource,objData,ram,&dataAddr,dataStartAddr,ramSize)==0)
             {
               errCodeList[errIdx]=STRING_TOO_LONG;
               errLine[errIdx]=lineNb;
@@ -1254,14 +1364,14 @@ int main(int argc, char **argv)
       }
       for (j=0;j<vIdx;j++)
       {
-        /* printf("%s (%s) vs. %s (%s)\n",fndLabelTable[i],fndLabelScopeTable[i],varTable[j],varScopeTable[j]);*/
+         /* printf("%s (%s) vs. %s (%s)\n",fndLabelTable[i],fndLabelScopeTable[i],varTable[j],varScopeTable[j]); */
         if ((strcmp(fndLabelTable[i],varTable[j])==0)  &&
           ((strcmp(varScopeTable[j],"global")==0) ||
            (strcmp(varScopeTable[j],fndLabelScopeTable[i])==0))) break;
       }
       if (j<vIdx)
       {
-        /* printf("Solved %s (variable)\n",fndLabelTable[i]); */
+        /*printf("Solved %s (variable) = %d\n",fndLabelTable[i],varAddr[j]);*/  
         zValue(objCode,varAddr[j],fndLabelAddr[i]);
       }
       else
@@ -1310,7 +1420,17 @@ int main(int argc, char **argv)
     {
       if (strcmp(wordTable[i],"main")==0) break;
     }
-    if (i<wIdx) zValue(objCode,wordAddr[i],3);
+    if (i<wIdx) 
+    {
+      if (target==ZTH1)
+      {
+        zValue(objCode,wordAddr[i],3);
+      }
+      else
+      {
+        zValue(objCode,wordAddr[i],0);
+      }
+    }
     else
     {
       printf("No main word declared\n");
@@ -1323,9 +1443,9 @@ int main(int argc, char **argv)
   if (errIdx==0)
   {
     printf("Compilation succesful !\n");
-    writeFile("ram_h.mif",objData,ram,0);
-    writeFile("ram_l.mif",objData,ram,1);
-    writeFile("rom.mif",objCode,rom,2);
+    writeFile("ram_h.mif",objData,ram,0,ramSize);
+    writeFile("ram_l.mif",objData,ram,1,ramSize);
+    writeFile("rom.mif",objCode,rom,2,ramSize);
   }
 
   /* debug */
@@ -1451,7 +1571,7 @@ int isInteger(char *a)
    (not an integer, not already in the base dictionary)
 */
 
-int validWord(char *a,char **baseWord)
+int validWord(char *a,char **baseWord,int nb_base_words)
 {
   int i,x;
 
@@ -1459,7 +1579,7 @@ int validWord(char *a,char **baseWord)
   if (strlen(a)>39) x=0;
   if (isInteger(a)) x=0;
   if (a[0]=='$') x=0;
-  for (i=0;i<NB_BASE_WORDS;i++)
+  for (i=0;i<nb_base_words;i++)
   {
     if (strcmp(baseWord[i],a)==0) x=0;
   }
@@ -1530,11 +1650,11 @@ void zValue(char **objCode,int n,int pc)
        
 /* Write object (.mif) file */
 
-int writeFile(char *name,char **obj,char *mem,int b)
+int writeFile(char *name,char **obj,char *mem,int b,int ramSize)
 {
   FILE *fo;
   char v[5];
-  int i,j,k,r;
+  int i,j,k,r,l;
 
   r=1;
   fo=fopen(name,"w");
@@ -1551,22 +1671,37 @@ int writeFile(char *name,char **obj,char *mem,int b)
   {
     fprintf(fo,"WIDTH=8;\n");
   }
-  fprintf(fo,"DEPTH=8192;\n\n");
+  if (b!=2)
+  {
+    fprintf(fo,"DEPTH=%d;\n\n",ramSize);
+  }
+  else
+  {
+    fprintf(fo,"DEPTH=8192;\n\n");
+  }
   fprintf(fo,"ADDRESS_RADIX=HEX;\n");
   fprintf(fo,"DATA_RADIX=HEX;\n\n");
   fprintf(fo,"CONTENT BEGIN\n\n");
 
   i=0;
-  while (i<8192)
+  if (b!=2)
+  {
+    l=ramSize;
+  }
+  else
+  {
+    l=8192;
+  }
+  while (i<l)
   {
     k=0;
     if (mem[i]=='0')
     {
       /* see if block of 0s has to be written */
-      if ((mem[i+1]=='0') && (i<8192))
+      if ((mem[i+1]=='0') && (i<l))
       {
         j=i;
-        while((mem[i]=='0') && (i<8192)) i++;
+        while((mem[i]=='0') && (i<l)) i++;
         k=1;
       }
     }
@@ -1789,7 +1924,7 @@ int zHexData(char **objData,char *ram,char *latom,int *dataAddr)
 
 /* read a character string (ending with ") from source file */
 
-int zStringData(FILE *f,char **objData,char *mem,int *dataAddr)
+int zStringData(FILE *f,char **objData,char *mem,int *dataAddr,int dataStartAddr,int ramSize)
 {
   int a,r;
   char c;
@@ -1861,11 +1996,11 @@ int zStringData(FILE *f,char **objData,char *mem,int *dataAddr)
           a++;
           it=0;
         }
-        if (a>8192)
+        if (a>ramSize)
         {
           r=0;
           done=1;
-          a=DATA_START_ADDR;
+          a=dataStartAddr;
         }
       }
     }
